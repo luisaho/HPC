@@ -1,0 +1,48 @@
+How to use this Makefile
+
+To build the project just type
+
+$ make
+
+To run the application use the matrix dataset from /home/lect0012/matrix or download it from 
+
+http://www.cise.ufl.edu/research/sparse/MM/AMD/G3_circuit.tar.gz
+
+$ wget http://www.cise.ufl.edu/research/sparse/MM/AMD/G3_circuit.tar.gz
+
+unpack the tar ball
+
+$ tar xzf G3_circuit.tar.gz
+
+and then run (default matrix directory is set to /home/lect0012/matrix)
+
+$ make run
+
+The equation system using the G3_circuit matrix needs about 5009 iterations to converge in the serial case. Please note that this can differ on the GPU or even on the CPU using OpenMP. 
+
+To build the application with debug information type
+
+$ make clean
+$ make dbg=1
+
+You can run the debug version which uses the small example debug.mtx:
+
+$ make run_debug
+
+Every step of the algorithm will be printed out and the results can be compared step by step with the provided document (Appendix A).
+
+To compile for CUDA rename all c-files containing CUDA code (probably only solver.c) to *.cu (e.g. solver.cu) and use:
+
+$ module switch intel gcc
+$ module load cuda
+$ make clean
+$ make cuda
+
+To use the OpenACC compiler use:
+
+$ module switch gcc pgi (or module switch intel pgi, depending on the compiler that was loaded)
+$ make openacc
+
+IMPORTANT: We already prepared the targets run and run_serena. Specify all needed parameters here. For the evaluation we will just execute the run target to do the measurements.
+
+Feel free to modify the Makefile!

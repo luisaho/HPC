@@ -1,0 +1,36 @@
+%%MatrixMarket matrix coordinate real general
+%=================================================================================
+%
+% This ASCII file represents a sparse MxN matrix with L 
+% nonzeros in the following Matrix Market format:
+%
+% +----------------------------------------------+
+% |%%MatrixMarket matrix coordinate real general | <--- header line
+% |%                                             | <--+
+% |% comments                                    |    |-- 0 or more comment lines
+% |%                                             | <--+         
+% |    M  N  L                                   | <--- rows, columns, entries
+% |    I1  J1  A(I1, J1)                         | <--+
+% |    I2  J2  A(I2, J2)                         |    |
+% |    I3  J3  A(I3, J3)                         |    |-- L lines
+% |        . . .                                 |    |
+% |    IL JL  A(IL, JL)                          | <--+
+% +----------------------------------------------+   
+%
+% Indices are 1-based, i.e. A(1,1) is the first element.
+%
+%=================================================================================
+5 5 13 
+1     1  10.000e+00
+1     2   1.000e+00
+2     1   1.000e+00
+2     2  20.000e+00 
+2     3   2.000e+00
+3     2   2.000e+00
+3     3  30.000e+00 
+3     4   3.000e+00
+4     3   3.000e+00
+4     4  40.000e+00 
+4     5   4.000e+00
+5     4   4.000e+00
+5     5  50.000e+00 
