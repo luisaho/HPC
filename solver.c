@@ -33,7 +33,7 @@ void vectorDot(const floatType* a, const floatType* b, const int n, floatType* a
 	int i;
 	floatType temp;
 	temp=0;
-#pragma acc parallel loop reduction(+:temp)
+#pragma acc parallel loop reduction(+:temp) vector_length(192) num_gangs(64) //present(b[0:n])
 	for(i=0; i<n; i++){
 		temp += a[i]*b[i];
 	}
@@ -43,7 +43,8 @@ void vectorDot(const floatType* a, const floatType* b, const int n, floatType* a
 /* y <- ax + y */
 void axpy(const floatType a, const floatType* x, const int n, floatType* y){
 	int i;
-#pragma acc loop
+//#pragma acc parallel present(x[0:n], y[0:n])
+#pragma acc parallel loop
 	for(i=0; i<n; i++){
 		y[i]=a*x[i]+y[i];
 	}
@@ -52,7 +53,8 @@ void axpy(const floatType a, const floatType* x, const int n, floatType* y){
 /* y <- x + ay */
 void xpay(const floatType* x, const floatType a, const int n, floatType* y){
 	int i;
-#pragma acc loop
+//#pragma acc parallel present(x[0:n], y[0:n])
+#pragma acc parallel loop
 	for(i=0; i<n; i++){
 		y[i]=x[i]+a*y[i];
 	}
@@ -62,7 +64,8 @@ void xpay(const floatType* x, const floatType a, const int n, floatType* y){
  * Remember that A is stored in the ELLPACK-R format (data, indices, length, n, nnz, maxNNZ). */
 void matvec(const int n, const int nnz, const int maxNNZ, const floatType* data, const int* indices, const int* length, const floatType* x, floatType* y){
 	int i, j, k;
-#pragma acc parallel loop present(data[0:n*maxNNZ], indices[0:n*maxNNZ], length[0:n]) copyin(x[0:n]) copyout(y[0:n])
+#pragma acc parallel vector_length(192) num_gangs(64) present(data, indices, length) present_or_copy(x[0:n]) copyout(y[0:n])
+#pragma acc loop 
 	for (i = 0; i < n; i++) {
 		y[i] = 0;
 		for (j = 0; j < length[i]; j++) {
@@ -77,7 +80,7 @@ void nrm2(const floatType* x, const int n, floatType* nrm){
 	int i;
 	floatType temp;
 	temp = 0;
-#pragma acc parallel loop reduction(+:temp)
+#pragma acc parallel loop reduction(+:temp) vector_length(192) num_gangs(64)//present(x[0:n])
 	for(i = 0; i<n; i++){
 		temp+=(x[i]*x[i]);
 	}
@@ -108,8 +111,7 @@ void nrm2(const floatType* x, const int n, floatType* nrm){
    p(k+1)    = r(k+1) + beta*p(k)      
 ***************************************/
 void cg(const int n, const int nnz, const int maxNNZ, const floatType* data, const int* indices, const int* length, const floatType* b, floatType* x, struct SolverConfig* sc){
-#pragma acc data copyin(data[0:n*maxNNZ], indices[0:n*maxNNZ], length[0:n])
-{
+
 	floatType* r, *p, *q;
 	floatType alpha, beta, rho, rho_old, dot_pq, bnrm2;
 	int iter;
@@ -121,6 +123,8 @@ void cg(const int n, const int nnz, const int maxNNZ, const floatType* data, con
 	p = (floatType*)malloc(n * sizeof(floatType));
 	q = (floatType*)malloc(n * sizeof(floatType));
 	
+#pragma acc data copyin(data[0:n*maxNNZ], indices[0:n*maxNNZ], length[0:n], n, nnz, maxNNZ, b[0:n]) copy(x[0:n]) create(alpha, beta) //eigentlich auch copy(x[0:n]) aber error: not found on device???
+{
 	DBGMAT("Start matrix A = ", n, nnz, maxNNZ, data, indices, length)
 	DBGVEC("b = ", b, n);
 	DBGVEC("x = ", x, n);
@@ -147,7 +151,6 @@ void cg(const int n, const int nnz, const int maxNNZ, const floatType* data, con
 
 	for(iter = 0; iter < sc->maxIter; iter++){
 		DBGMSG("=============== Iteration %d ======================\n", iter);
-	
 		/* q(k)      = A * p(k) */
 		timeMatvec_s = getWTime();
 		matvec(n, nnz, maxNNZ, data, indices, length, p, q);
@@ -164,6 +167,7 @@ void cg(const int n, const int nnz, const int maxNNZ, const floatType* data, con
 
 		/* x(k+1)    = x(k) + alpha*p(k) */
 		axpy(alpha, p, n, x);
+#pragma acc update host(x[0:n])
 		DBGVEC("x = x + alpha * p= ", x, n);
 
 		/* r(k+1)    = r(k) - alpha*q(k) */
@@ -216,5 +220,5 @@ void cg(const int n, const int nnz, const int maxNNZ, const floatType* data, con
 	free(r);
 	free(p);
 	free(q);
-}
+}//ende data region
 }
