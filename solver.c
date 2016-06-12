@@ -29,12 +29,12 @@
 
 
 /* ab <- a' * b */
-void vectorDot(const floatType* a, const floatType* b, const int n, floatType* ab){
+void vectorDot(const floatType* a, const floatType* b, const int n, floatType* ab) {
 	int i;
-	floatType temp;
-	temp=0;
-#pragma acc parallel loop reduction(+:temp) vector_length(192) num_gangs(64) //present(b[0:n])
-	for(i=0; i<n; i++){
+	floatType temp = 0;
+#pragma acc parallel num_gangs(64) vector_length(192) present(a[0:n],b[0:n])
+#pragma acc loop reduction(+:temp) private(i) 
+	for (i=0; i<n; i++){
 		temp += a[i]*b[i];
 	}
 	*ab = temp;
@@ -43,9 +43,10 @@ void vectorDot(const floatType* a, const floatType* b, const int n, floatType* a
 /* y <- ax + y */
 void axpy(const floatType a, const floatType* x, const int n, floatType* y){
 	int i;
-//#pragma acc parallel present(x[0:n], y[0:n])
-#pragma acc parallel loop
-	for(i=0; i<n; i++){
+
+#pragma acc parallel num_gangs(64) vector_length(192) present(x[0:n], y[0:n])
+#pragma acc loop gang vector  
+	for (i = 0; i < n; i++) {
 		y[i]=a*x[i]+y[i];
 	}
 }
@@ -53,38 +54,86 @@ void axpy(const floatType a, const floatType* x, const int n, floatType* y){
 /* y <- x + ay */
 void xpay(const floatType* x, const floatType a, const int n, floatType* y){
 	int i;
-//#pragma acc parallel present(x[0:n], y[0:n])
-#pragma acc parallel loop
-	for(i=0; i<n; i++){
+
+#pragma acc parallel num_gangs(64) vector_length(192) present(x[0:n],y[0:n])
+#pragma acc loop gang vector 
+	for (i = 0; i < n; i++) {
 		y[i]=x[i]+a*y[i];
 	}
 }
 
+
 /* y <- A*x
  * Remember that A is stored in the ELLPACK-R format (data, indices, length, n, nnz, maxNNZ). */
 void matvec(const int n, const int nnz, const int maxNNZ, const floatType* data, const int* indices, const int* length, const floatType* x, floatType* y){
-	int i, j, k;
-#pragma acc parallel vector_length(192) num_gangs(64) present(data, indices, length) present_or_copy(x[0:n]) copyout(y[0:n])
-#pragma acc loop 
-	for (i = 0; i < n; i++) {
-		y[i] = 0;
-		for (j = 0; j < length[i]; j++) {
-			k = j * n + i;
-			y[i] += data[k] * x[indices[k]];
+
+#pragma acc parallel present(data[0:n*maxNNZ], indices[0:n*maxNNZ], length[0:n], x[0:n], y[0:n])
+#pragma acc loop gang vector
+	for (int i = 0; i < n; i++) {
+		floatType temp = 0;	
+	#pragma acc loop
+		for (int j = 0; j < length[i]; j++) {
+			int k = j * n + i;
+			temp += data[k] * x[indices[k]];
 		}
+
+		y[i] = temp;
 	}
 }
 
+
+
 /* nrm <- ||x||_2 */
-void nrm2(const floatType* x, const int n, floatType* nrm){
-	int i;
+void nrm2(const floatType* x, const int n, floatType* nrm) {
+	int i;	
 	floatType temp;
 	temp = 0;
-#pragma acc parallel loop reduction(+:temp) vector_length(192) num_gangs(64)//present(x[0:n])
-	for(i = 0; i<n; i++){
-		temp+=(x[i]*x[i]);
+#pragma acc parallel num_gangs(64) vector_length(192) present(x[0:n])
+#pragma acc loop reduction(+:temp)
+	for (i=0; i<n; i++){
+		temp += x[i]*x[i];
 	}
-	*nrm=sqrt(temp);
+	*nrm = 1/sqrt(temp);
+}
+
+
+void vectorSquare(const floatType* x, const int n, floatType* sq) {
+	int i;
+	floatType temp = 0;
+
+#pragma acc parallel num_gangs(64) vector_length(192) present(x[0:n])
+#pragma acc loop reduction(+:temp)
+	for (i=0; i<n; i++){
+		temp += x[i]*x[i];
+	}
+
+	*sq = temp;
+}
+
+
+
+void diagMult(const floatType* diag, const floatType* x, const int n, floatType* out) {
+
+#pragma acc parallel num_gangs(64) vector_length(192) present(x[0:n],diag[0:n], out[0:n])
+#pragma acc loop gang vector
+	for (int i=0; i<n; i++){
+		out[i] = x[i]*diag[i];
+	}
+}
+
+void getDiag(const int n, const int nnz, const int maxNNZ, const floatType* data, const int* indices, const int* length, floatType* diag) {
+
+#pragma acc parallel num_gangs(64) vector_length(192) present(data[0:n*maxNNZ], indices[0:n*maxNNZ], length[0:n], diag[0:n])
+#pragma acc loop gang vector
+	for (int i=0; i<n; i++) {
+		for (int j = 0; j < length[i]; j++) {
+			int idx = j*n + i;
+			int realcol = indices[idx];
+			if (i == realcol) {
+				diag[i] = 1/data[idx];
+			}
+		}
+	}
 }
 
 
@@ -110,24 +159,29 @@ void nrm2(const floatType* x, const int n, floatType* nrm){
    beta      = rho(k+1) / rho(k)
    p(k+1)    = r(k+1) + beta*p(k)      
 ***************************************/
-void cg(const int n, const int nnz, const int maxNNZ, const floatType* data, const int* indices, const int* length, const floatType* b, floatType* x, struct SolverConfig* sc){
+void cg(const int n, const int nnz, const int maxNNZ, const floatType* restrict const data, const int* restrict const indices, const int* restrict const length, const floatType* restrict const b, floatType* restrict const x, struct SolverConfig* sc){
 
-	floatType* r, *p, *q;
-	floatType alpha, beta, rho, rho_old, dot_pq, bnrm2;
+	floatType *r, *p, *q, *z, *diag;
+	floatType alpha, beta, rho, rho_old, dot_pq, bnrm2, check;
 	int iter;
- 	double timeMatvec_s;
- 	double timeMatvec=0;
-	
+	floatType timeMatvec_s;
+	floatType timeMatvec=0;
+
+
 	/* allocate memory */
 	r = (floatType*)malloc(n * sizeof(floatType));
 	p = (floatType*)malloc(n * sizeof(floatType));
 	q = (floatType*)malloc(n * sizeof(floatType));
-	
-#pragma acc data copyin(data[0:n*maxNNZ], indices[0:n*maxNNZ], length[0:n], n, nnz, maxNNZ, b[0:n]) copy(x[0:n]) create(alpha, beta) //eigentlich auch copy(x[0:n]) aber error: not found on device???
+	z = (floatType*)malloc(n * sizeof(floatType));
+	diag = (floatType*)malloc(n * sizeof(floatType));
+
+#pragma acc data create(r[0:n], q[0:n], diag[0:n], z[0:n]) copyin(data[0:n * maxNNZ], indices[0:n * maxNNZ], length[0:n], b[0:n]) copy(x[0:n])
 {
 	DBGMAT("Start matrix A = ", n, nnz, maxNNZ, data, indices, length)
 	DBGVEC("b = ", b, n);
 	DBGVEC("x = ", x, n);
+
+	getDiag(n, nnz, maxNNZ, data, indices, length, diag);
 
 	/* r(0)    = b - Ax(0) */
 	timeMatvec_s = getWTime();
@@ -135,42 +189,46 @@ void cg(const int n, const int nnz, const int maxNNZ, const floatType* data, con
 	timeMatvec += getWTime() - timeMatvec_s;
 	xpay(b, -1.0, n, r);
 	DBGVEC("r = b - Ax = ", r, n);
-	
 
+	diagMult(diag, r, n, z);
+#pragma acc update host(z[0:n])
+
+	memcpy(p, z, n * sizeof(floatType));
+#pragma acc enter data copyin(p[0:n])
+	
 	/* Calculate initial residuum */
 	nrm2(r, n, &bnrm2);
-	bnrm2 = 1.0 /bnrm2;
 
 	/* p(0)    = r(0) */
 	memcpy(p, r, n*sizeof(floatType));
 	DBGVEC("p = r = ", p, n);
 
-	/* rho(0)    =  <r(0),r(0)> */
-	vectorDot(r, r, n, &rho);
-	printf("rho_0=%e\n", rho);
+	/* rho(0)  = <r(0),z(0)> */ //hier anpassen
+	vectorDot(r, z, n, &rho);
+	vectorSquare(r, n, &check);
+	printf("rho_0=%e/%e\n", rho, check);
 
 	for(iter = 0; iter < sc->maxIter; iter++){
 		DBGMSG("=============== Iteration %d ======================\n", iter);
-		/* q(k)      = A * p(k) */
+		/* q(k)   = A * p(k) */
 		timeMatvec_s = getWTime();
 		matvec(n, nnz, maxNNZ, data, indices, length, p, q);
 		timeMatvec += getWTime() - timeMatvec_s;
 		DBGVEC("q = A * p= ", q, n);
 
-		/* dot_pq    = <p(k),q(k)> */
+		/* dot_pq  = <p(k),q(k)> */
 		vectorDot(p, q, n, &dot_pq);
 		DBGSCA("dot_pq = <p, q> = ", dot_pq);
 
-		/* alpha     = rho(k) / dot_pq */
+		/* alpha   = rho(k) / dot_pq */
 		alpha = rho / dot_pq;
 		DBGSCA("alpha = rho / dot_pq = ", alpha);
 
-		/* x(k+1)    = x(k) + alpha*p(k) */
+		/* x(k+1)  = x(k) + alpha*p(k) */
 		axpy(alpha, p, n, x);
-#pragma acc update host(x[0:n])
 		DBGVEC("x = x + alpha * p= ", x, n);
 
-		/* r(k+1)    = r(k) - alpha*q(k) */
+		/* r(k+1)  = r(k) - alpha*q(k) */
 		axpy(-alpha, q, n, r);
 		DBGVEC("r = r - alpha * q= ", r, n);
 
@@ -179,15 +237,18 @@ void cg(const int n, const int nnz, const int maxNNZ, const floatType* data, con
 		DBGSCA("rho_old = rho = ", rho_old);
 
 
-		/* rho(k+1)  = <r(k+1), r(k+1)> */
-		vectorDot(r, r, n, &rho);
+		/* rho(k+1) = <r(k+1), z(k+1)> */ //hier anpassen
+		diagMult(diag, r, n, z);
+
+		vectorDot(r, z, n, &rho);
+		vectorSquare(r, n, &check);
 		DBGSCA("rho = <r, r> = ", rho);
 
 		/* Normalize the residual with initial one */
-		sc->residual= sqrt(rho) * bnrm2;
+		sc->residual = sqrt(check) * bnrm2;
+  	
 
 
-   	
 		/* Check convergence ||r(k+1)||_2 < eps
 		 * If the residual is smaller than the CG
 		 * tolerance specified in the CG_TOLERANCE
@@ -195,19 +256,22 @@ void cg(const int n, const int nnz, const int maxNNZ, const floatType* data, con
 		 * is good enough and we can stop the 
 		 * algorithm. */
 		printf("res_%d=%e\n", iter+1, sc->residual);
-		if(sc->residual <= sc->tolerance)
+		if(sc->residual < sc->tolerance) {
 			break;
+		}
+		
 
-
-		/* beta      = rho(k+1) / rho(k) */
+		/* beta   = rho(k+1) / rho(k) */
 		beta = rho / rho_old;
 		DBGSCA("beta = rho / rho_old= ", beta);
 
-		/* p(k+1)    = r(k+1) + beta*p(k) */
-		xpay(r, beta, n, p);
+		/* p(k+1)  = r(k+1) + beta*p(k) */
+		xpay(z, beta, n, p);
 		DBGVEC("p = r + beta * p> = ", p, n);
-
 	}
+	}//end data region
+
+
 
 	/* Store the number of iterations and the 
 	 * time for the sparse matrix vector
@@ -220,5 +284,4 @@ void cg(const int n, const int nnz, const int maxNNZ, const floatType* data, con
 	free(r);
 	free(p);
 	free(q);
-}//ende data region
 }
